@@ -10,31 +10,41 @@ Unlike video-based systems, this approach works with periodic images from a fixe
 ## 🎯 Objectives
 - Compare snow-covered mountain images
 - Detect visual and snow density changes
+- Detect whether snow moved downslope
 - Assess avalanche risk level (LOW / MEDIUM / HIGH)
-- Generate visual analysis results
+- Generate visual analysis results, from the command line or a web interface
 
 ## 🛠️ Technologies Used
 - Python 3  
 - OpenCV  
 - NumPy  
+- Streamlit (web interface)
 
 ## 🚀 Usage
-1. Install the requirements:
-   ```
-   pip install -r requirements.txt
-   ```
-2. Run the program (defaults to `mountain_1.png` and `mountain_2.png`):
-   ```
-   python "Avalanche Monitoring System.py"
-   python "Avalanche Monitoring System.py" earlier.jpg later.jpg
-   ```
-3. Optional: monitor only the slope (exclude sky, buildings, poles):
-   ```
-   python "Avalanche Monitoring System.py" --roi 0,150,1194,550
-   ```
-   or put a black/white `roi_mask.png` (white = monitored area) next to the script.
-4. View the generated result image: `avalanche_analysis_result.jpg`
-   (use `--no-show` to skip the preview window)
+Install the requirements:
+```
+pip install -r requirements.txt
+```
+
+### Web interface
+```
+streamlit run app.py
+```
+Use the sample images or upload your own two photos. The sidebar sets the downslope
+direction and the part of the image to monitor.
+
+### Command line
+```
+python avalanche_monitor.py                         # mountain_1.png vs mountain_2.png
+python avalanche_monitor.py earlier.jpg later.jpg
+python avalanche_monitor.py --roi 0,150,1194,550    # monitor only this rectangle
+python avalanche_monitor.py --downslope 60          # fall line points down-right
+```
+- Instead of `--roi`, a black/white `roi_mask.png` (white = monitored area) can be placed
+  next to the script.
+- `--downslope` is the fall-line direction in the image: 0 = right, 90 = down (default),
+  180 = left.
+- The result is saved to `avalanche_analysis_result.jpg` (`--no-show` skips the window).
 
 ## 📊 Method Overview
 1. **Image alignment** – ORB keypoints + RANSAC homography align the second image
@@ -46,30 +56,46 @@ Unlike video-based systems, this approach works with periodic images from a fixe
    chosen automatically with Otsu's method instead of a fixed value.
 5. **Change detection** – image differencing, morphological cleaning and removal of
    small regions (noise, snowflakes, people).
-6. **Risk classification** – based on the largest connected changed region, total
-   changed area and snow coverage change:
+6. **Motion direction** – two independent clues:
+   - *Optical flow* (Farneback) finds snow that slid even when its brightness hardly
+     changed. Flow is trusted only where the surface has texture and the
+     forward-backward check agrees, which filters out drifting fog.
+   - *Region shape*: avalanche paths are long tongues along the fall line, measured
+     with image moments (elongation and main axis angle).
+7. **Risk classification** – based on the largest changed (or downslope-sliding)
+   region, total changed area and snow coverage change:
 
    | Level  | Largest region | Total change | Snow change |
    |--------|----------------|--------------|-------------|
    | HIGH   | > 5 %          | > 10 %       | > 35 %      |
    | MEDIUM | > 1.5 %        | > 4 %        | > 20 %      |
 
-## 🧪 Test Results
-| Test case                              | Largest region | Risk   |
-|----------------------------------------|----------------|--------|
-| Real images (camera shifted, fog)      | 0.0 %          | LOW    |
-| Synthetic small avalanche              | 2.1 %          | MEDIUM |
-| Synthetic large avalanche              | 15.9 %         | HIGH   |
+   Downslope movement raises the risk by one level.
 
-Before alignment, the camera shift alone produced 2.2 % false change.
+## 🧪 Test Results
+| Test case                                  | Detected by           | Direction     | Risk   |
+|--------------------------------------------|-----------------------|---------------|--------|
+| Real images (camera shifted, fog)          | –                     | –             | LOW    |
+| Synthetic small avalanche tongue (2 %)     | Differencing + shape  | Downslope     | HIGH   |
+| Synthetic large avalanche tongue (16 %)    | Differencing + shape  | Downslope     | HIGH   |
+| Synthetic snow slab sliding down 12 px     | Optical flow          | Downslope     | HIGH   |
+| Synthetic snow slab moving up 12 px        | Optical flow          | Not downslope | LOW    |
+
+- Before alignment, the camera shift alone produced 2.2 % false change.
+- The sliding slab is invisible to plain differencing (0 % change); only optical flow finds it.
+- The synthetic tests are artificial; thresholds should be tuned on real avalanche images.
 
 ## 📂 Project Structure
-snow-detection2/
-├── Avalanche Monitoring System.py
+```
+snow-detection/
+├── avalanche_monitor.py           # analysis pipeline + command line
+├── app.py                         # Streamlit web interface
 ├── requirements.txt
 ├── mountain_1.png
 ├── mountain_2.png
 ├── avalanche_analysis_result.jpg
 └── README.md
+```
+
 ## 📝 Note
 This project is developed for educational purposes. Real avalanche monitoring systems require additional sensors and environmental data.
