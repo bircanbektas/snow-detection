@@ -7,7 +7,9 @@ import numpy as np
 
 # ==================== SETTINGS ====================
 
-DIFF_THRESHOLD = 30          # Minimum brightness difference counted as change
+TEXTURE_WINDOW = 11          # Window size (pixels) for local roughness / correlation
+ROUGHNESS_THRESHOLD = 0.7    # log ratio of roughness counted as "surface became rough"
+CORRELATION_THRESHOLD = 0.3  # Local correlation below this = surface pattern changed
 MIN_REGION_AREA_RATIO = 0.002  # Ignore changed regions smaller than 0.2% of the ROI
 MIN_GOOD_MATCHES = 15        # Minimum feature matches needed for alignment
 
@@ -155,23 +157,70 @@ def calculate_snow_density(image, mask):
     return snow_percentage, snow_mask
 
 
+def detect_sky(image):
+    """
+    Sky and clouds change all the time and must not count as snow change.
+    Sky = clearly blue area connected to the top border of the image.
+    (Fog and white clouds cannot be told apart from snow by colour, so they are kept.)
+    """
+    b, g, r = [c.astype(np.int16) for c in cv2.split(image)]
+    _, std = local_stats(cv2.cvtColor(image, cv2.COLOR_BGR2GRAY), 15)
+    # Smooth as well as blue: forests and blue shadows on snow have texture
+    candidate = ((b > r + 25) & (b >= g) & (std < 6)).astype(np.uint8) * 255
+    candidate = cv2.morphologyEx(candidate, cv2.MORPH_OPEN, np.ones((5, 5), np.uint8))
+
+    # Only regions touching the top edge are sky (blue shadows on snow are not)
+    count, labels = cv2.connectedComponents(candidate)
+    top_labels = set(np.unique(labels[0, :])) - {0}
+    sky = np.isin(labels, list(top_labels)).astype(np.uint8) * 255
+    if cv2.countNonZero(sky) > 0.5 * sky.size:
+        return np.zeros_like(sky)  # implausible, do not trust it
+    return cv2.dilate(sky, np.ones((15, 15), np.uint8))
+
+
+def local_stats(gray, ksize):
+    """Local mean and standard deviation in a ksize x ksize window."""
+    g = gray.astype(np.float32)
+    mean = cv2.blur(g, (ksize, ksize))
+    var = np.maximum(cv2.blur(g * g, (ksize, ksize)) - mean ** 2, 0)
+    return mean, np.sqrt(var)
+
+
 def detect_changes(gray1, gray2, mask):
     """
-    Image differencing on aligned + normalized images.
+    Illumination-invariant change detection on aligned images.
+
+    Plain brightness differencing fails on real webcams: moving shadows,
+    clouds and day-to-day light changes look like "change" everywhere.
+    Two measures that a shadow does not change are used instead:
+    - roughness (local std / mean): a shadow darkens a surface but keeps its
+      relative contrast; avalanche debris turns smooth snow into a rough surface
+    - local correlation (structure term of SSIM): brightness scaling keeps the
+      pattern, a real surface change destroys it
+
     Small isolated regions (noise, falling snowflakes, moving people)
     are removed; an avalanche is a large connected region.
     """
-    gray1_blur = cv2.GaussianBlur(gray1, (21, 21), 0)
-    gray2_blur = cv2.GaussianBlur(gray2, (21, 21), 0)
+    k = TEXTURE_WINDOW
+    m1, s1 = local_stats(gray1, k)
+    m2, s2 = local_stats(gray2, k)
+    rough1, rough2 = s1 / (m1 + 10), s2 / (m2 + 10)
+    rough_increase = np.log((rough2 + 0.01) / (rough1 + 0.01))
 
-    difference = cv2.absdiff(gray1_blur, gray2_blur)
+    g1, g2 = gray1.astype(np.float32), gray2.astype(np.float32)
+    corr = (cv2.blur(g1 * g2, (k, k)) - m1 * m2) / (s1 * s2 + 1e-3)
+    textured = (s1 > MIN_TEXTURE_STD * 1.5) & (s2 > MIN_TEXTURE_STD * 1.5)
+
+    changed = (rough_increase > ROUGHNESS_THRESHOLD) | (textured & (corr < CORRELATION_THRESHOLD))
+    thresh_diff = (changed & (mask > 0)).astype(np.uint8) * 255
+    thresh_diff = cv2.morphologyEx(thresh_diff, cv2.MORPH_OPEN, np.ones((5, 5), np.uint8))
+    thresh_diff = cv2.morphologyEx(thresh_diff, cv2.MORPH_CLOSE, np.ones((9, 9), np.uint8))
+
+    # Change score for the visualization (0 = same surface, 255 = strongly changed)
+    score = np.maximum(rough_increase / (2 * ROUGHNESS_THRESHOLD),
+                       np.where(textured, (1 - corr) / 2, 0))
+    difference = np.clip(score * 255, 0, 255).astype(np.uint8)
     difference = cv2.bitwise_and(difference, mask)
-
-    _, thresh_diff = cv2.threshold(difference, DIFF_THRESHOLD, 255, cv2.THRESH_BINARY)
-
-    kernel = np.ones((5, 5), np.uint8)
-    thresh_diff = cv2.morphologyEx(thresh_diff, cv2.MORPH_OPEN, kernel)
-    thresh_diff = cv2.dilate(thresh_diff, kernel, iterations=2)
 
     # Keep only large connected regions
     roi_area = max(cv2.countNonZero(mask), 1)
@@ -273,7 +322,9 @@ def analyze_motion(gray1, gray2, change_mask, roi_mask, downslope_deg=DOWNSLOPE_
         result["shape_angle"] = float(np.rad2deg(axis_angle) % 180)
         # The axis has no direction, so compare with |cos|
         axis = np.array([np.cos(axis_angle), np.sin(axis_angle)])
-        result["shape_downslope"] = bool(result["elongation"] > MIN_ELONGATION
+        # Thin strips along edges are common noise; only a sizeable region counts
+        large_enough = stats[largest, cv2.CC_STAT_AREA] / roi_area * 100 >= MIN_MOVING_AREA
+        result["shape_downslope"] = bool(large_enough and result["elongation"] > MIN_ELONGATION
                                          and abs(axis @ down) > cos_tol)
 
     result["is_downslope"] = bool(result["flow_downslope"] or result["shape_downslope"])
@@ -410,18 +461,24 @@ def analyze(img1, img2, roi=None, roi_file=None, roi_mask=None,
         roi_mask = load_roi_mask(roi, roi_file, img1.shape)
     roi_mask = cv2.bitwise_and(roi_mask, valid_mask)
 
+    # Sky and clouds are never part of the slope
+    sky = cv2.bitwise_or(detect_sky(img1), detect_sky(img2_aligned))
+    roi_mask = cv2.bitwise_and(roi_mask, cv2.bitwise_not(sky))
+
     # 3) Snow coverage
     snow_density1, _ = calculate_snow_density(img1, roi_mask)
     snow_density2, _ = calculate_snow_density(img2_aligned, roi_mask)
     snow_change = snow_density2 - snow_density1
 
-    # 4) Lighting / fog normalization, then change detection
-    gray1 = normalize_lighting(cv2.cvtColor(img1, cv2.COLOR_BGR2GRAY))
-    gray2 = normalize_lighting(cv2.cvtColor(img2_aligned, cv2.COLOR_BGR2GRAY))
-    gray2 = match_brightness(gray2, gray1, roi_mask)
-
+    # 4) Illumination-invariant change detection (on the original brightness)
+    raw1 = cv2.cvtColor(img1, cv2.COLOR_BGR2GRAY)
+    raw2 = cv2.cvtColor(img2_aligned, cv2.COLOR_BGR2GRAY)
     difference, change_mask, change_percentage, largest_percentage, regions = \
-        detect_changes(gray1, gray2, roi_mask)
+        detect_changes(raw1, raw2, roi_mask)
+
+    # Optical flow works better on fog / light normalized images
+    gray1 = normalize_lighting(raw1)
+    gray2 = match_brightness(normalize_lighting(raw2), gray1, roi_mask)
 
     # 5) Motion direction
     motion = analyze_motion(gray1, gray2, change_mask, roi_mask, downslope_deg)
@@ -441,6 +498,7 @@ def analyze(img1, img2, roi=None, roi_file=None, roi_mask=None,
             "snow_change": snow_change, "change_percentage": change_percentage,
             "largest_region": largest_percentage, "regions": len(regions),
             "motion": {k: v for k, v in motion.items() if k not in ("flow", "motion_mask")},
+            "change_mask": change_mask, "motion_mask": motion["motion_mask"],
             "result_image": result_image}
 
 

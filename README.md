@@ -54,8 +54,14 @@ python avalanche_monitor.py --downslope 60          # fall line points down-righ
    of fog and changing daylight.
 4. **Snow detection** – bright and low-saturation pixels; the brightness threshold is
    chosen automatically with Otsu's method instead of a fixed value.
-5. **Change detection** – image differencing, morphological cleaning and removal of
-   small regions (noise, snowflakes, people).
+5. **Change detection** – illumination-invariant instead of plain brightness differencing:
+   - *roughness* (local std / mean) is unchanged by a shadow but rises when smooth snow
+     turns into rough avalanche debris,
+   - *local correlation* (SSIM structure term) is unchanged by brightness scaling but
+     drops when the surface pattern itself changes.
+
+   Clear blue sky is masked out automatically; small regions (noise, snowflakes,
+   people) are removed.
 6. **Motion direction** – two independent clues:
    - *Optical flow* (Farneback) finds snow that slid even when its brightness hardly
      changed. Flow is trusted only where the surface has texture and the
@@ -73,23 +79,77 @@ python avalanche_monitor.py --downslope 60          # fall line points down-righ
    Downslope movement raises the risk by one level.
 
 ## 🧪 Test Results
+
+### Synthetic tests
 | Test case                                  | Detected by           | Direction     | Risk   |
 |--------------------------------------------|-----------------------|---------------|--------|
-| Real images (camera shifted, fog)          | –                     | –             | LOW    |
-| Synthetic small avalanche tongue (2 %)     | Differencing + shape  | Downslope     | HIGH   |
-| Synthetic large avalanche tongue (16 %)    | Differencing + shape  | Downslope     | HIGH   |
+| Sample images (camera shifted, fog)        | –                     | –             | LOW    |
+| Synthetic small avalanche tongue (2 %)     | Texture + shape       | Downslope     | HIGH   |
+| Synthetic large avalanche tongue (15 %)    | Texture + shape       | Downslope     | HIGH   |
 | Synthetic snow slab sliding down 12 px     | Optical flow          | Downslope     | HIGH   |
 | Synthetic snow slab moving up 12 px        | Optical flow          | Not downslope | LOW    |
 
 - Before alignment, the camera shift alone produced 2.2 % false change.
-- The sliding slab is invisible to plain differencing (0 % change); only optical flow finds it.
-- The synthetic tests are artificial; thresholds should be tuned on real avalanche images.
+- The sliding slab is invisible to change detection; only optical flow finds it.
+
+### Evaluation on real webcam data (SLF Davos)
+The synthetic tests only show that the pipeline behaves as designed. To see how it
+performs on real cameras, it was evaluated on the expert-annotated SLF avalanche
+webcam dataset ([Hafner 2024, EnviDat, CC BY-SA 4.0](https://doi.org/10.16904/envidat.526)).
+
+- 54 unique images were grouped by camera view; consecutive images of the same view
+  form **32 pairs** (30 minutes to several months apart).
+- Ground truth "new avalanche" = annotated in the later image but not in the earlier one.
+  11 pairs contain a new avalanche, 21 do not.
+
+| Method                              | New avalanches detected | False alarms | Pixels of new avalanches found |
+|-------------------------------------|-------------------------|--------------|--------------------------------|
+| Brightness differencing (old)       | 11 / 11                 | 20 / 21      | 34.5 %                         |
+| Texture-based (current)             | 7 / 11                  | 17 / 21      | 24.8 %                         |
+
+Only the 30-minute pairs, the interval this project is designed for (5 pairs):
+
+| Method                              | New avalanche detected  | False alarms |
+|-------------------------------------|-------------------------|--------------|
+| Brightness differencing (old)       | 1 / 1 (wrong location)  | 4 / 4        |
+| Texture-based (current)             | 0 / 1                   | 1 / 4        |
+
+**What this shows**
+- The old method raised an alarm on almost every pair, so its "detections" are
+  meaningless: moving sun shadows, clouds and day-to-day light changes all looked
+  like change. Its one 30-minute detection marked trees in the foreground, not the avalanche.
+- The texture-based method removes shadow false alarms on 30-minute pairs
+  (3 of 4 negative pairs now correctly LOW). The remaining false alarm is caused by clouds.
+- Real avalanches are small (0.2 – 5 % of the image) and are still mostly missed.
+- With pairs days or weeks apart (new snowfall, melting, different light), simple
+  image processing does not work.
+
+**Limitations of this evaluation:** only 11 positive pairs (2 within a few hours), so
+the numbers are rough. Thresholds were deliberately not tuned further on this small set,
+to avoid overfitting.
+
+**Conclusion:** classical image processing is not enough for reliable avalanche
+detection on real webcams. The SLF researchers use deep-learning segmentation models
+for this; training such a model on this dataset is the natural next step.
+
+### Reproduce
+```
+# synthetic tests
+python evaluation/make_synthetic_avalanche.py mountain_2.png
+python evaluation/make_synthetic_slide.py mountain_1.png
+python avalanche_monitor.py mountain_1.png avalanche_big.png
+
+# real data (download ias_data.zip from EnviDat and unzip it first, ~2.9 GB)
+python evaluation/prepare_slf.py <unzipped folder> prepared
+python evaluation/evaluate_slf.py prepared results
+```
 
 ## 📂 Project Structure
 ```
 snow-detection/
 ├── avalanche_monitor.py           # analysis pipeline + command line
 ├── app.py                         # Streamlit web interface
+├── evaluation/                    # synthetic tests + SLF real-data evaluation
 ├── requirements.txt
 ├── mountain_1.png
 ├── mountain_2.png

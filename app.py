@@ -105,8 +105,10 @@ with st.expander("How does it work?"):
     st.markdown(
         "1. **Alignment** – the later photo is warped onto the earlier one, "
         "so camera shake is not mistaken for movement.\n"
-        "2. **Lighting correction** – fog and daylight changes are reduced.\n"
-        "3. **Change detection** – brightness differences, keeping only large regions.\n"
+        "2. **Sky removal** – clear blue sky is excluded automatically.\n"
+        "3. **Change detection** – looks for changes in surface texture (roughness and "
+        "pattern) instead of brightness, so moving shadows are ignored; "
+        "only large regions are kept.\n"
         "4. **Motion** – optical flow finds snow that slid, even without a colour change; "
         "the shape check finds long tongues along the fall line.\n"
         "5. **Risk** – based on the largest changed or sliding region; "
