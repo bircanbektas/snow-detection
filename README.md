@@ -35,8 +35,18 @@ pip install -r requirements.txt
 ```
 streamlit run app.py
 ```
-Use the sample images or upload your own two photos. The sidebar sets the downslope
-direction and the part of the image to monitor.
+Use the sample images or upload your own two photos. The sidebar chooses the detection
+method and the part of the image to monitor:
+- **AI model (U-Net, default)** – outlines avalanches in both photos and marks the new
+  ones in red. The model (~100 MB) is downloaded from the
+  [GitHub release](https://github.com/bircanbektas/snow-detection/releases/tag/model-v1)
+  on first use and runs with OpenCV, so PyTorch is not needed.
+- **Classical image processing** – texture change + motion analysis (see Method Overview);
+  the downslope direction can be set.
+
+The real webcam sample pair (Dischma valley, 19 March 2021, 09:35 and 11:35) is from the
+[SLF dataset](https://doi.org/10.16904/envidat.526) (CC BY-SA 4.0). It was part of the
+final model's training data, so it is a demonstration, not a test.
 
 ### Command line
 ```
@@ -202,6 +212,8 @@ python evaluation/evaluate_slf.py prepared results
 snow-detection/
 ├── avalanche_monitor.py           # analysis pipeline + command line
 ├── app.py                         # Streamlit web interface
+├── ai_detector.py                 # U-Net avalanche detection (ONNX model, OpenCV)
+├── samples/                       # real SLF webcam sample pair
 ├── evaluation/                    # synthetic tests + SLF real-data evaluation
 ├── deep_learning/                 # Colab notebook: U-Net vs. classical pipeline
 ├── requirements.txt
