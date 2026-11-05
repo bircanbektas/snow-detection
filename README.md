@@ -7,6 +7,11 @@
 This project detects snow movement and potential avalanche risk by comparing two images taken at different time intervals (e.g., 30 minutes apart).  
 Unlike video-based systems, this approach works with periodic images from a fixed camera, making it suitable for real-world mountain monitoring.
 
+On real webcam data the classical pipeline raises too many false alarms, so it is also
+compared with a deep-learning model (U-Net). The model finds 8 of 13 new avalanches at
+the right place, with 5 false alarms on 21 pairs, compared with 17 for the classical pipeline
+(see [Deep learning comparison](#deep-learning-comparison-u-net)).
+
 ## 🎯 Objectives
 - Compare snow-covered mountain images
 - Detect visual and snow density changes
@@ -132,38 +137,51 @@ to avoid overfitting.
 detection on real webcams, so a deep-learning model was trained next.
 
 ### Deep learning comparison (U-Net)
-A U-Net with an ImageNet-pretrained ResNet-34 encoder was trained to segment avalanches
-in a single image ([notebook](deep_learning/avalanche_segmentation.ipynb), runs on a free
-Google Colab GPU in about 30 minutes). A pair raises an alarm when the model finds
-avalanche area (≥ 0.2 % of the image) in the later image that was not there in the earlier one.
+A U-Net with an ImageNet-pretrained ResNet-34 encoder was trained to outline avalanches
+in a single photo ([notebook](deep_learning/avalanche_segmentation.ipynb), runs on a free
+Google Colab GPU in about an hour). A pair raises an alarm when the model finds avalanche
+area (≥ 0.2 % of the image) in the later image that was not there in the earlier one.
 
-- **Leave-camera-view-out:** the webcam images were split into 3 folds by camera view.
-  Every image was evaluated by a model that never saw that view during training
-  (training: ~36 webcam images + the hand-held photos of the dataset).
-- Both methods were run on the same 34 pairs in the same notebook (13 with a new avalanche,
-  21 without).
+- **Pre-training** on the [UIBK Avalanche Dataset](https://researchdata.uibk.ac.at/records/h07f4-qzd17)
+  (Fox et al. 2023, Apache 2.0): ~3,600 field photos with expert avalanche outlines,
+  plus the hand-held photos of the SLF dataset. No SLF webcam image is used.
+- **Threshold** (0.7) chosen on the UIBK test split, never on the SLF webcams.
+  UIBK test: pixel F1 0.74, IoU 0.58.
+- **Fine-tuning, leave-camera-view-out:** the SLF webcam images were split into 3 folds
+  by camera view; every image was evaluated by a model that never saw that view.
+- All methods were run on the same 34 pairs in the same notebook
+  (13 with a new avalanche, 21 without).
 
-| Method                    | New avalanches detected | …at the right place | False alarms | Pixels of new avalanches found |
-|---------------------------|-------------------------|---------------------|--------------|--------------------------------|
-| Classical (texture-based) | 9 / 13                  | 7                   | 17 / 21      | 24.6 %                         |
-| Deep learning (U-Net)     | 3 / 13                  | 2                   | **0 / 21**   | 7.7 %                          |
+| Method                              | New avalanches detected | …at the right place | False alarms | Pixels of new avalanches found |
+|-------------------------------------|-------------------------|---------------------|--------------|--------------------------------|
+| Classical (texture-based)           | 9 / 13                  | 7                   | 17 / 21      | 24.6 %                         |
+| U-Net, SLF webcams only (first try) | 3 / 13                  | 2                   | 0 / 21       | 7.7 %                          |
+| U-Net, pre-trained on UIBK          | 4 / 13                  | 3                   | 3 / 21       | 8.4 %                          |
+| **U-Net, pre-trained + fine-tuned** | **8 / 13**              | **8**               | **5 / 21**   | 19.2 %                         |
 
-Per-image segmentation on unseen views: pixel precision 71 %, pixel recall 8 %, IoU 0.08.
+Only the pairs at most 6 hours apart (2 with a new avalanche, 8 without):
+classical 0 of 2 at the right place with 5 false alarms; fine-tuned U-Net
+**2 of 2** with 2 false alarms.
+
+Per-image segmentation on unseen webcam views (fine-tuned): pixel precision 47 %,
+recall 37 %, IoU 0.26.
 
 ![Deep learning example](deep_learning/example.jpg)
-*Green: new avalanches (expert annotation), red: U-Net, blue: classical pipeline.*
+*Green: new avalanche (expert annotation), red: fine-tuned U-Net, blue: classical pipeline.*
 
 **What this shows**
-- The model has learned what an avalanche looks like: it raised **no false alarm** on
-  21 pairs, and 71 % of the pixels it marks are real avalanche. Shadows, clouds and
-  snowfall, which fool the classical pipeline, do not fool it.
-- But it is far too cautious: it finds only 8 % of avalanche pixels and misses most
-  avalanches. With ~36 annotated webcam images per fold, the training data is very small.
-- The classical pipeline "detects" more avalanches only because it raises an alarm on
-  almost every pair.
+- With enough training data the model works: it finds 8 of 13 new avalanches, **every
+  one at the right place**, while raising about a third as many false alarms as the
+  classical pipeline (5 vs 17 of 21).
+- Pre-training on other avalanche photos alone is not enough; the model must also see
+  webcam images (fine-tuning roughly doubled the hits).
+- The classical pipeline "detects" 9 avalanches only because it raises an alarm on
+  almost every pair; 2 of its hits are at the wrong place.
+- Some false alarms mark surfaces that look like avalanche debris but are not in the
+  annotations; they could not be verified.
 
-**Next steps:** more training data (e.g. other public avalanche datasets), training at
-higher resolution, and choosing the decision threshold on a separate validation set.
+**Limitations:** only 13 positive pairs, so the numbers are rough; avalanches smaller
+than ~0.2 % of the image are still often missed.
 
 ### Reproduce
 ```
