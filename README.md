@@ -129,8 +129,41 @@ the numbers are rough. Thresholds were deliberately not tuned further on this sm
 to avoid overfitting.
 
 **Conclusion:** classical image processing is not enough for reliable avalanche
-detection on real webcams. The SLF researchers use deep-learning segmentation models
-for this; training such a model on this dataset is the natural next step.
+detection on real webcams, so a deep-learning model was trained next.
+
+### Deep learning comparison (U-Net)
+A U-Net with an ImageNet-pretrained ResNet-34 encoder was trained to segment avalanches
+in a single image ([notebook](deep_learning/avalanche_segmentation.ipynb), runs on a free
+Google Colab GPU in about 30 minutes). A pair raises an alarm when the model finds
+avalanche area (≥ 0.2 % of the image) in the later image that was not there in the earlier one.
+
+- **Leave-camera-view-out:** the webcam images were split into 3 folds by camera view.
+  Every image was evaluated by a model that never saw that view during training
+  (training: ~36 webcam images + the hand-held photos of the dataset).
+- Both methods were run on the same 34 pairs in the same notebook (13 with a new avalanche,
+  21 without).
+
+| Method                    | New avalanches detected | …at the right place | False alarms | Pixels of new avalanches found |
+|---------------------------|-------------------------|---------------------|--------------|--------------------------------|
+| Classical (texture-based) | 9 / 13                  | 7                   | 17 / 21      | 24.6 %                         |
+| Deep learning (U-Net)     | 3 / 13                  | 2                   | **0 / 21**   | 7.7 %                          |
+
+Per-image segmentation on unseen views: pixel precision 71 %, pixel recall 8 %, IoU 0.08.
+
+![Deep learning example](deep_learning/example.jpg)
+*Green: new avalanches (expert annotation), red: U-Net, blue: classical pipeline.*
+
+**What this shows**
+- The model has learned what an avalanche looks like: it raised **no false alarm** on
+  21 pairs, and 71 % of the pixels it marks are real avalanche. Shadows, clouds and
+  snowfall, which fool the classical pipeline, do not fool it.
+- But it is far too cautious: it finds only 8 % of avalanche pixels and misses most
+  avalanches. With ~36 annotated webcam images per fold, the training data is very small.
+- The classical pipeline "detects" more avalanches only because it raises an alarm on
+  almost every pair.
+
+**Next steps:** more training data (e.g. other public avalanche datasets), training at
+higher resolution, and choosing the decision threshold on a separate validation set.
 
 ### Reproduce
 ```
@@ -142,6 +175,8 @@ python avalanche_monitor.py mountain_1.png avalanche_big.png
 # real data (download ias_data.zip from EnviDat and unzip it first, ~2.9 GB)
 python evaluation/prepare_slf.py <unzipped folder> prepared
 python evaluation/evaluate_slf.py prepared results
+
+# deep learning: open deep_learning/avalanche_segmentation.ipynb in Google Colab, Run all
 ```
 
 ## 📂 Project Structure
@@ -150,6 +185,7 @@ snow-detection/
 ├── avalanche_monitor.py           # analysis pipeline + command line
 ├── app.py                         # Streamlit web interface
 ├── evaluation/                    # synthetic tests + SLF real-data evaluation
+├── deep_learning/                 # Colab notebook: U-Net vs. classical pipeline
 ├── requirements.txt
 ├── mountain_1.png
 ├── mountain_2.png
